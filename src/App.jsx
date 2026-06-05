@@ -5,7 +5,7 @@ import { supabase } from "./supabaseClient";
 const categories = ["All", "Personal", "School", "Work", "Fun", "Urgent"];
 const priorities = ["Low", "Medium", "High"];
 
-const defaultSubcategories = {
+const fallbackSubcategories = {
   School: ["Assignment", "Exam", "Quiz"],
   Work: ["Meeting", "Email", "Project"],
 };
@@ -33,14 +33,10 @@ export default function App() {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const [theme, setTheme] = useState(() => {
-    return localStorage.getItem("khyati-theme") || "light";
-  });
+  const [theme, setTheme] = useState("light");
 
-  const [customSubcategories, setCustomSubcategories] = useState(() => {
-    const saved = localStorage.getItem("khyati-subcategories");
-    return saved ? JSON.parse(saved) : defaultSubcategories;
-  });
+  const [customSubcategories, setCustomSubcategories] =
+    useState(fallbackSubcategories);
 
   const [newTask, setNewTask] = useState("");
   const [category, setCategory] = useState("Personal");
@@ -68,20 +64,13 @@ export default function App() {
   const allDone = tasks.length > 0 && completedCount === tasks.length;
 
   useEffect(() => {
-    fetchTasks();
-  }, []);
-
-  useEffect(() => {
-    localStorage.setItem("khyati-theme", theme);
     document.body.className = theme;
   }, [theme]);
 
   useEffect(() => {
-    localStorage.setItem(
-      "khyati-subcategories",
-      JSON.stringify(customSubcategories)
-    );
-  }, [customSubcategories]);
+    fetchTasks();
+    fetchSubcategories();
+  }, []);
 
   useEffect(() => {
     if (allDone && !celebrated) {
@@ -107,12 +96,46 @@ export default function App() {
       .order("created_at", { ascending: false });
 
     if (error) {
-      console.error("Error loading tasks:", error);
+      console.error("Error loading tasks:", error.message);
+      console.error(error);
+      setTasks([]);
     } else {
       setTasks(data || []);
     }
 
     setLoading(false);
+  }
+
+  async function fetchSubcategories() {
+    const { data, error } = await supabase
+      .from("subcategories")
+      .select("*")
+      .order("name", { ascending: true });
+
+    if (error) {
+      console.error("Error loading subcategories:", error.message);
+      console.error(error);
+      return;
+    }
+
+    const grouped = {
+      School: [...fallbackSubcategories.School],
+      Work: [...fallbackSubcategories.Work],
+    };
+
+    (data || []).forEach((item) => {
+      if (!grouped[item.category]) return;
+
+      const exists = grouped[item.category].some(
+        (name) => name.toLowerCase() === item.name.toLowerCase()
+      );
+
+      if (!exists) {
+        grouped[item.category].push(item.name);
+      }
+    });
+
+    setCustomSubcategories(grouped);
   }
 
   const filteredTasks = useMemo(() => {
@@ -130,7 +153,7 @@ export default function App() {
         (statusFilter === "Completed" && task.completed) ||
         (statusFilter === "Active" && !task.completed);
 
-      const matchesSearch = task.title
+      const matchesSearch = (task.title || "")
         .toLowerCase()
         .includes(search.toLowerCase());
 
@@ -166,7 +189,7 @@ export default function App() {
     return sorted;
   }, [tasks, filter, statusFilter, search, sortBy]);
 
-  function addSubcategory() {
+  async function addSubcategory() {
     const cleaned = newSubcategory.trim();
 
     if (!cleaned) return;
@@ -181,6 +204,20 @@ export default function App() {
     if (alreadyExists) {
       setSubcategory(cleaned);
       setNewSubcategory("");
+      return;
+    }
+
+    const { error } = await supabase.from("subcategories").insert([
+      {
+        category,
+        name: cleaned,
+      },
+    ]);
+
+    if (error) {
+      console.error("Error adding subcategory:", error.message);
+      console.error(error);
+      alert(`Could not add subcategory: ${error.message}`);
       return;
     }
 
@@ -210,12 +247,14 @@ export default function App() {
 
     const { data, error } = await supabase
       .from("tasks")
-      .insert(newTaskData)
+      .insert([newTaskData])
       .select()
       .single();
 
     if (error) {
-      console.error("Error adding task:", error);
+      console.error("Error adding task:", error.message);
+      console.error(error);
+      alert(`Could not add task: ${error.message}`);
       return;
     }
 
@@ -242,7 +281,9 @@ export default function App() {
       .single();
 
     if (error) {
-      console.error("Error updating task:", error);
+      console.error("Error updating task:", error.message);
+      console.error(error);
+      alert(`Could not update task: ${error.message}`);
       return;
     }
 
@@ -253,7 +294,9 @@ export default function App() {
     const { error } = await supabase.from("tasks").delete().eq("id", id);
 
     if (error) {
-      console.error("Error deleting task:", error);
+      console.error("Error deleting task:", error.message);
+      console.error(error);
+      alert(`Could not delete task: ${error.message}`);
       return;
     }
 
@@ -276,7 +319,9 @@ export default function App() {
       .single();
 
     if (error) {
-      console.error("Error editing task:", error);
+      console.error("Error editing task:", error.message);
+      console.error(error);
+      alert(`Could not edit task: ${error.message}`);
       return;
     }
 
@@ -298,7 +343,9 @@ export default function App() {
       .in("id", completedIds);
 
     if (error) {
-      console.error("Error clearing completed tasks:", error);
+      console.error("Error clearing completed tasks:", error.message);
+      console.error(error);
+      alert(`Could not clear completed tasks: ${error.message}`);
       return;
     }
 
@@ -306,13 +353,16 @@ export default function App() {
   }
 
   async function resetChecklist() {
-    const { error } = await supabase
-      .from("tasks")
-      .delete()
-      .neq("id", "00000000-0000-0000-0000-000000000000");
+    const taskIds = tasks.map((task) => task.id);
+
+    if (taskIds.length === 0) return;
+
+    const { error } = await supabase.from("tasks").delete().in("id", taskIds);
 
     if (error) {
-      console.error("Error resetting checklist:", error);
+      console.error("Error resetting checklist:", error.message);
+      console.error(error);
+      alert(`Could not reset checklist: ${error.message}`);
       return;
     }
 
