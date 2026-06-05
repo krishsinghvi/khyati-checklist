@@ -1,28 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import confetti from "canvas-confetti";
-
-const starterTasks = [
-  {
-    id: crypto.randomUUID(),
-    title: "Finish the first checklist item",
-    category: "Personal",
-    subcategory: "",
-    priority: "Medium",
-    dueDate: "",
-    estimatedTime: "30 min",
-    completed: false,
-  },
-  {
-    id: crypto.randomUUID(),
-    title: "Plan something fun",
-    category: "Fun",
-    subcategory: "",
-    priority: "Low",
-    dueDate: "",
-    estimatedTime: "1 hr",
-    completed: false,
-  },
-];
+import { supabase } from "./supabaseClient";
 
 const categories = ["All", "Personal", "School", "Work", "Fun", "Urgent"];
 const priorities = ["Low", "Medium", "High"];
@@ -52,10 +30,8 @@ function parseEstimatedMinutes(timeText) {
 }
 
 export default function App() {
-  const [tasks, setTasks] = useState(() => {
-    const saved = localStorage.getItem("khyati-checklist");
-    return saved ? JSON.parse(saved) : starterTasks;
-  });
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   const [theme, setTheme] = useState(() => {
     return localStorage.getItem("khyati-theme") || "light";
@@ -92,8 +68,8 @@ export default function App() {
   const allDone = tasks.length > 0 && completedCount === tasks.length;
 
   useEffect(() => {
-    localStorage.setItem("khyati-checklist", JSON.stringify(tasks));
-  }, [tasks]);
+    fetchTasks();
+  }, []);
 
   useEffect(() => {
     localStorage.setItem("khyati-theme", theme);
@@ -121,6 +97,23 @@ export default function App() {
       setCelebrated(false);
     }
   }, [allDone, celebrated]);
+
+  async function fetchTasks() {
+    setLoading(true);
+
+    const { data, error } = await supabase
+      .from("tasks")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("Error loading tasks:", error);
+    } else {
+      setTasks(data || []);
+    }
+
+    setLoading(false);
+  }
 
   const filteredTasks = useMemo(() => {
     const priorityRank = {
@@ -200,13 +193,12 @@ export default function App() {
     setNewSubcategory("");
   }
 
-  function addTask(event) {
+  async function addTask(event) {
     event.preventDefault();
 
     if (!newTask.trim()) return;
 
-    const task = {
-      id: crypto.randomUUID(),
+    const newTaskData = {
       title: newTask.trim(),
       category,
       subcategory,
@@ -216,7 +208,18 @@ export default function App() {
       completed: false,
     };
 
-    setTasks([task, ...tasks]);
+    const { data, error } = await supabase
+      .from("tasks")
+      .insert(newTaskData)
+      .select()
+      .single();
+
+    if (error) {
+      console.error("Error adding task:", error);
+      return;
+    }
+
+    setTasks([data, ...tasks]);
 
     setNewTask("");
     setCategory("Personal");
@@ -227,15 +230,33 @@ export default function App() {
     setEstimatedTime("");
   }
 
-  function toggleTask(id) {
-    setTasks(
-      tasks.map((task) =>
-        task.id === id ? { ...task, completed: !task.completed } : task
-      )
-    );
+  async function toggleTask(id) {
+    const task = tasks.find((task) => task.id === id);
+    if (!task) return;
+
+    const { data, error } = await supabase
+      .from("tasks")
+      .update({ completed: !task.completed })
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error("Error updating task:", error);
+      return;
+    }
+
+    setTasks(tasks.map((task) => (task.id === id ? data : task)));
   }
 
-  function deleteTask(id) {
+  async function deleteTask(id) {
+    const { error } = await supabase.from("tasks").delete().eq("id", id);
+
+    if (error) {
+      console.error("Error deleting task:", error);
+      return;
+    }
+
     setTasks(tasks.filter((task) => task.id !== id));
   }
 
@@ -244,24 +265,57 @@ export default function App() {
     setEditingText(task.title);
   }
 
-  function saveEdit(id) {
+  async function saveEdit(id) {
     if (!editingText.trim()) return;
 
-    setTasks(
-      tasks.map((task) =>
-        task.id === id ? { ...task, title: editingText.trim() } : task
-      )
-    );
+    const { data, error } = await supabase
+      .from("tasks")
+      .update({ title: editingText.trim() })
+      .eq("id", id)
+      .select()
+      .single();
 
+    if (error) {
+      console.error("Error editing task:", error);
+      return;
+    }
+
+    setTasks(tasks.map((task) => (task.id === id ? data : task)));
     setEditingId(null);
     setEditingText("");
   }
 
-  function clearCompleted() {
+  async function clearCompleted() {
+    const completedIds = tasks
+      .filter((task) => task.completed)
+      .map((task) => task.id);
+
+    if (completedIds.length === 0) return;
+
+    const { error } = await supabase
+      .from("tasks")
+      .delete()
+      .in("id", completedIds);
+
+    if (error) {
+      console.error("Error clearing completed tasks:", error);
+      return;
+    }
+
     setTasks(tasks.filter((task) => !task.completed));
   }
 
-  function resetChecklist() {
+  async function resetChecklist() {
+    const { error } = await supabase
+      .from("tasks")
+      .delete()
+      .neq("id", "00000000-0000-0000-0000-000000000000");
+
+    if (error) {
+      console.error("Error resetting checklist:", error);
+      return;
+    }
+
     setTasks([]);
   }
 
@@ -465,7 +519,12 @@ export default function App() {
           </aside>
 
           <div className="task-list">
-            {filteredTasks.length === 0 ? (
+            {loading ? (
+              <div className="empty-state">
+                <h2>Loading checklist...</h2>
+                <p>Grabbing the latest version from the cloud.</p>
+              </div>
+            ) : filteredTasks.length === 0 ? (
               <div className="empty-state">
                 <h2>No tasks found</h2>
                 <p>Add a new item or change your filters.</p>
@@ -496,7 +555,9 @@ export default function App() {
                           }}
                           autoFocus
                         />
-                        <button onClick={() => saveEdit(task.id)}>Save</button>
+                        <button type="button" onClick={() => saveEdit(task.id)}>
+                          Save
+                        </button>
                       </div>
                     ) : (
                       <>
@@ -526,8 +587,12 @@ export default function App() {
                   </div>
 
                   <div className="task-actions">
-                    <button onClick={() => startEditing(task)}>Edit</button>
-                    <button onClick={() => deleteTask(task.id)}>Delete</button>
+                    <button type="button" onClick={() => startEditing(task)}>
+                      Edit
+                    </button>
+                    <button type="button" onClick={() => deleteTask(task.id)}>
+                      Delete
+                    </button>
                   </div>
                 </article>
               ))
@@ -536,8 +601,12 @@ export default function App() {
         </div>
 
         <div className="bottom-actions">
-          <button onClick={clearCompleted}>Clear completed</button>
-          <button onClick={resetChecklist}>Reset all</button>
+          <button type="button" onClick={clearCompleted}>
+            Clear completed
+          </button>
+          <button type="button" onClick={resetChecklist}>
+            Reset all
+          </button>
         </div>
       </section>
     </main>
