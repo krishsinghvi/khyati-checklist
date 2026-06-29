@@ -29,7 +29,489 @@ function parseEstimatedMinutes(timeText) {
   return hours * 60 + minutes;
 }
 
+function formatCurrency(value) {
+  const amount = Number(value || 0);
+
+  return amount.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2,
+  });
+}
+
+function getPokerProfit(session) {
+  return Number(session.cash_out || 0) - Number(session.buy_in || 0);
+}
+
+function AppMenu({ activePage, setActivePage, theme, setTheme }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  function switchPage(page) {
+    setActivePage(page);
+    setMenuOpen(false);
+  }
+
+  return (
+    <div className="floating-menu">
+      <button
+        type="button"
+        className="hamburger-button"
+        onClick={() => setMenuOpen(!menuOpen)}
+        aria-label="Open menu"
+      >
+        <span></span>
+        <span></span>
+        <span></span>
+      </button>
+
+      {menuOpen && (
+        <div className="menu-dropdown">
+          <button
+            type="button"
+            className={activePage === "checklist" ? "active" : ""}
+            onClick={() => switchPage("checklist")}
+          >
+            Checklist
+          </button>
+
+          <button
+            type="button"
+            className={activePage === "poker" ? "active" : ""}
+            onClick={() => switchPage("poker")}
+          >
+            Poker Earnings
+          </button>
+
+          <div className="menu-divider"></div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setTheme(theme === "light" ? "dark" : "light");
+              setMenuOpen(false);
+            }}
+          >
+            {theme === "light" ? "🌙 Dark Mode" : "☀️ Light Mode"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PokerTracker() {
+  const [pokerSessions, setPokerSessions] = useState([]);
+  const [pokerLoading, setPokerLoading] = useState(true);
+
+  const [pokerForm, setPokerForm] = useState({
+    date: new Date().toISOString().slice(0, 10),
+    game_type: "Online",
+    buy_in: "",
+    cash_out: "",
+    hours: "",
+  });
+
+  const [pokerFilter, setPokerFilter] = useState("All");
+  const [pokerSortBy, setPokerSortBy] = useState("Newest first");
+
+  useEffect(() => {
+    fetchPokerSessions();
+  }, []);
+
+  async function fetchPokerSessions() {
+    setPokerLoading(true);
+
+    const { data, error } = await supabase
+      .from("poker_sessions")
+      .select("*")
+      .order("date", { ascending: false });
+
+    if (error) {
+      console.error("Error loading poker sessions:", error.message);
+      console.error(error);
+      setPokerSessions([]);
+    } else {
+      setPokerSessions(data || []);
+    }
+
+    setPokerLoading(false);
+  }
+
+  function handlePokerChange(event) {
+    const { name, value } = event.target;
+
+    setPokerForm({
+      ...pokerForm,
+      [name]: value,
+    });
+  }
+
+  async function addPokerSession(event) {
+    event.preventDefault();
+
+    if (!pokerForm.date || !pokerForm.buy_in || !pokerForm.cash_out || !pokerForm.hours) {
+      alert("Please fill out date, buy-in, cash-out, and hours.");
+      return;
+    }
+
+    const newPokerSession = {
+      date: pokerForm.date,
+      game_type: pokerForm.game_type,
+      buy_in: Number(pokerForm.buy_in),
+      cash_out: Number(pokerForm.cash_out),
+      hours: Number(pokerForm.hours),
+    };
+
+    const { data, error } = await supabase
+      .from("poker_sessions")
+      .insert([newPokerSession])
+      .select()
+      .single();
+
+    if (error) {
+      console.error("Error adding poker session:", error.message);
+      console.error(error);
+      alert(`Could not add poker session: ${error.message}`);
+      return;
+    }
+
+    setPokerSessions([data, ...pokerSessions]);
+
+    setPokerForm({
+      date: new Date().toISOString().slice(0, 10),
+      game_type: "Online",
+      buy_in: "",
+      cash_out: "",
+      hours: "",
+    });
+  }
+
+  async function deletePokerSession(id) {
+    const { error } = await supabase.from("poker_sessions").delete().eq("id", id);
+
+    if (error) {
+      console.error("Error deleting poker session:", error.message);
+      console.error(error);
+      alert(`Could not delete poker session: ${error.message}`);
+      return;
+    }
+
+    setPokerSessions(pokerSessions.filter((session) => session.id !== id));
+  }
+
+  async function resetPokerTracker() {
+    const sessionIds = pokerSessions.map((session) => session.id);
+
+    if (sessionIds.length === 0) return;
+
+    const confirmed = window.confirm("Are you sure you want to delete all poker sessions?");
+    if (!confirmed) return;
+
+    const { error } = await supabase
+      .from("poker_sessions")
+      .delete()
+      .in("id", sessionIds);
+
+    if (error) {
+      console.error("Error resetting poker tracker:", error.message);
+      console.error(error);
+      alert(`Could not reset poker tracker: ${error.message}`);
+      return;
+    }
+
+    setPokerSessions([]);
+  }
+
+  const pokerStats = useMemo(() => {
+    const totalProfit = pokerSessions.reduce(
+      (sum, session) => sum + getPokerProfit(session),
+      0
+    );
+
+    const totalHours = pokerSessions.reduce(
+      (sum, session) => sum + Number(session.hours || 0),
+      0
+    );
+
+    const hourlyRate = totalHours > 0 ? totalProfit / totalHours : 0;
+
+    const winningSessions = pokerSessions.filter(
+      (session) => getPokerProfit(session) > 0
+    ).length;
+
+    const winRate =
+      pokerSessions.length > 0
+        ? Math.round((winningSessions / pokerSessions.length) * 100)
+        : 0;
+
+    const bestSession =
+      pokerSessions.length > 0
+        ? Math.max(...pokerSessions.map((session) => getPokerProfit(session)))
+        : 0;
+
+    const worstSession =
+      pokerSessions.length > 0
+        ? Math.min(...pokerSessions.map((session) => getPokerProfit(session)))
+        : 0;
+
+    return {
+      totalProfit,
+      totalHours,
+      hourlyRate,
+      winRate,
+      bestSession,
+      worstSession,
+      totalSessions: pokerSessions.length,
+    };
+  }, [pokerSessions]);
+
+  const filteredPokerSessions = useMemo(() => {
+    let filtered = [...pokerSessions];
+
+    if (pokerFilter !== "All") {
+      filtered = filtered.filter((session) => session.game_type === pokerFilter);
+    }
+
+    if (pokerSortBy === "Newest first") {
+      filtered.sort((a, b) => new Date(b.date) - new Date(a.date));
+    }
+
+    if (pokerSortBy === "Oldest first") {
+      filtered.sort((a, b) => new Date(a.date) - new Date(b.date));
+    }
+
+    if (pokerSortBy === "Highest profit") {
+      filtered.sort((a, b) => getPokerProfit(b) - getPokerProfit(a));
+    }
+
+    if (pokerSortBy === "Lowest profit") {
+      filtered.sort((a, b) => getPokerProfit(a) - getPokerProfit(b));
+    }
+
+    return filtered;
+  }, [pokerSessions, pokerFilter, pokerSortBy]);
+
+  const projectedProfit =
+    Number(pokerForm.cash_out || 0) - Number(pokerForm.buy_in || 0);
+
+  return (
+    <div className="poker-page">
+      <div className="poker-hero">
+        <div>
+          <p className="poker-eyebrow">♠ bankroll command center</p>
+          <h1>Poker Earnings</h1>
+          <p>
+            Track buy-ins, cash-outs, session type, and hourly rate in a clean
+            poker dashboard.
+          </p>
+        </div>
+
+        <button className="poker-danger-button" onClick={resetPokerTracker}>
+          Reset Tracker
+        </button>
+      </div>
+
+      <div className="poker-stats-grid">
+        <div className="poker-stat-card main-stat">
+          <span>Total Profit</span>
+          <strong className={pokerStats.totalProfit >= 0 ? "profit-good" : "profit-bad"}>
+            {formatCurrency(pokerStats.totalProfit)}
+          </strong>
+        </div>
+
+        <div className="poker-stat-card">
+          <span>Hourly Rate</span>
+          <strong className={pokerStats.hourlyRate >= 0 ? "profit-good" : "profit-bad"}>
+            {formatCurrency(pokerStats.hourlyRate)}/hr
+          </strong>
+        </div>
+
+        <div className="poker-stat-card">
+          <span>Sessions</span>
+          <strong>{pokerStats.totalSessions}</strong>
+        </div>
+
+        <div className="poker-stat-card">
+          <span>Win Rate</span>
+          <strong>{pokerStats.winRate}%</strong>
+        </div>
+
+        <div className="poker-stat-card">
+          <span>Total Hours</span>
+          <strong>{Number(pokerStats.totalHours || 0).toFixed(1)}</strong>
+        </div>
+
+        <div className="poker-stat-card">
+          <span>Best Session</span>
+          <strong className="profit-good">{formatCurrency(pokerStats.bestSession)}</strong>
+        </div>
+
+        <div className="poker-stat-card">
+          <span>Worst Session</span>
+          <strong className="profit-bad">{formatCurrency(pokerStats.worstSession)}</strong>
+        </div>
+      </div>
+
+      <div className="poker-main-grid">
+        <form className="poker-form-card" onSubmit={addPokerSession}>
+          <div>
+            <p className="poker-eyebrow">♦ new session</p>
+            <h2>Add Poker Session</h2>
+          </div>
+
+          <label>
+            Date
+            <input
+              type="date"
+              name="date"
+              value={pokerForm.date}
+              onChange={handlePokerChange}
+            />
+          </label>
+
+          <label>
+            Session Type
+            <select
+              name="game_type"
+              value={pokerForm.game_type}
+              onChange={handlePokerChange}
+            >
+              <option>Online</option>
+              <option>In Person</option>
+              <option>Casino</option>
+            </select>
+          </label>
+
+          <label>
+            Buy-In
+            <input
+              type="number"
+              name="buy_in"
+              placeholder="ex: 100"
+              value={pokerForm.buy_in}
+              onChange={handlePokerChange}
+            />
+          </label>
+
+          <label>
+            Cash-Out
+            <input
+              type="number"
+              name="cash_out"
+              placeholder="ex: 250"
+              value={pokerForm.cash_out}
+              onChange={handlePokerChange}
+            />
+          </label>
+
+          <label>
+            Hours Played
+            <input
+              type="number"
+              step="0.1"
+              name="hours"
+              placeholder="ex: 3.5"
+              value={pokerForm.hours}
+              onChange={handlePokerChange}
+            />
+          </label>
+
+          <div className="poker-projected-card">
+            <span>Projected Profit/Loss</span>
+            <strong className={projectedProfit >= 0 ? "profit-good" : "profit-bad"}>
+              {formatCurrency(projectedProfit)}
+            </strong>
+          </div>
+
+          <button type="submit" className="poker-add-button">
+            Add Session
+          </button>
+        </form>
+
+        <div className="poker-history-card">
+          <div className="poker-history-header">
+            <div>
+              <p className="poker-eyebrow">♣ session log</p>
+              <h2>History</h2>
+            </div>
+
+            <div className="poker-filters">
+              <select
+                value={pokerFilter}
+                onChange={(event) => setPokerFilter(event.target.value)}
+              >
+                <option>All</option>
+                <option>Online</option>
+                <option>In Person</option>
+                <option>Casino</option>
+              </select>
+
+              <select
+                value={pokerSortBy}
+                onChange={(event) => setPokerSortBy(event.target.value)}
+              >
+                <option>Newest first</option>
+                <option>Oldest first</option>
+                <option>Highest profit</option>
+                <option>Lowest profit</option>
+              </select>
+            </div>
+          </div>
+
+          {pokerLoading ? (
+            <div className="poker-empty">
+              <h2>Loading sessions...</h2>
+              <p>Pulling the latest data from Supabase.</p>
+            </div>
+          ) : filteredPokerSessions.length === 0 ? (
+            <div className="poker-empty">
+              <h2>No poker sessions yet</h2>
+              <p>Add your first session to start tracking your bankroll.</p>
+            </div>
+          ) : (
+            <div className="poker-session-list">
+              {filteredPokerSessions.map((session) => {
+                const profit = getPokerProfit(session);
+
+                return (
+                  <article key={session.id} className="poker-session-card">
+                    <div>
+                      <div className="poker-session-top">
+                        <h3>{session.game_type}</h3>
+                        <strong className={profit >= 0 ? "profit-good" : "profit-bad"}>
+                          {formatCurrency(profit)}
+                        </strong>
+                      </div>
+
+                      <div className="poker-session-meta">
+                        <span>{session.date}</span>
+                        <span>Buy-in: {formatCurrency(session.buy_in)}</span>
+                        <span>Cash-out: {formatCurrency(session.cash_out)}</span>
+                        <span>{session.hours} hrs</span>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="poker-delete-button"
+                      onClick={() => deletePokerSession(session.id)}
+                    >
+                      Delete
+                    </button>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
+  const [activePage, setActivePage] = useState("checklist");
+
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -73,7 +555,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (allDone && !celebrated) {
+    if (allDone && !celebrated && activePage === "checklist") {
       confetti({
         particleCount: 140,
         spread: 90,
@@ -85,7 +567,7 @@ export default function App() {
     if (!allDone) {
       setCelebrated(false);
     }
-  }, [allDone, celebrated]);
+  }, [allDone, celebrated, activePage]);
 
   async function fetchTasks() {
     setLoading(true);
@@ -370,294 +852,300 @@ export default function App() {
   }
 
   return (
-    <main className="app">
-      <section className="checklist-shell">
+    <main className={`app ${activePage === "poker" ? "poker-app" : ""}`}>
+      <AppMenu
+        activePage={activePage}
+        setActivePage={setActivePage}
+        theme={theme}
+        setTheme={setTheme}
+      />
+
+      <section className={`checklist-shell ${activePage === "poker" ? "poker-shell" : ""}`}>
         <div className="blob blob-one"></div>
         <div className="blob blob-two"></div>
 
-        <div className="top-bar">
-          <div>
-            <p className="eyebrow">aesthetic productivity board</p>
-            <h1>Khyati’s Checklist</h1>
-            <p className="subtitle">
-              Keep track of everything beautifully, one tiny win at a time.
-            </p>
-          </div>
-
-          <button
-            className="theme-toggle"
-            onClick={() => setTheme(theme === "light" ? "dark" : "light")}
-          >
-            {theme === "light" ? "🌙 Dark" : "☀️ Light"}
-          </button>
-        </div>
-
-        <div className="stats-grid">
-          <div className="stat-card">
-            <span>Total</span>
-            <strong>{tasks.length}</strong>
-          </div>
-
-          <div className="stat-card">
-            <span>Done</span>
-            <strong>{completedCount}</strong>
-          </div>
-
-          <div className="stat-card">
-            <span>Left</span>
-            <strong>{tasks.length - completedCount}</strong>
-          </div>
-        </div>
-
-        <div className="progress-card">
-          <div className="progress-info">
-            <span>
-              {completedCount} of {tasks.length} done
-            </span>
-            <strong>{progress}%</strong>
-          </div>
-
-          <div className="progress-track">
-            <div className="progress-fill" style={{ width: `${progress}%` }} />
-          </div>
-
-          {allDone && (
-            <div className="celebration">
-              ✨ Everything is done. Khyati is unstoppable. ✨
-            </div>
-          )}
-        </div>
-
-        <form className="task-form" onSubmit={addTask}>
-          <input
-            type="text"
-            placeholder="Add something to the checklist..."
-            value={newTask}
-            onChange={(event) => setNewTask(event.target.value)}
-          />
-
-          <select
-            value={category}
-            onChange={(event) => {
-              setCategory(event.target.value);
-              setSubcategory("");
-              setNewSubcategory("");
-            }}
-          >
-            {categories
-              .filter((cat) => cat !== "All")
-              .map((cat) => (
-                <option key={cat}>{cat}</option>
-              ))}
-          </select>
-
-          {(category === "School" || category === "Work") && (
-            <div className="subcategory-box">
-              <select
-                value={subcategory}
-                onChange={(event) => setSubcategory(event.target.value)}
-              >
-                <option value="">No subcategory</option>
-                {(customSubcategories[category] || []).map((sub) => (
-                  <option key={sub} value={sub}>
-                    {sub}
-                  </option>
-                ))}
-              </select>
-
-              <div className="new-subcategory-row">
-                <input
-                  type="text"
-                  placeholder={`New ${category.toLowerCase()} subcategory...`}
-                  value={newSubcategory}
-                  onChange={(event) => setNewSubcategory(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      addSubcategory();
-                    }
-                  }}
-                />
-
-                <button type="button" onClick={addSubcategory}>
-                  +
-                </button>
+        {activePage === "poker" ? (
+          <PokerTracker />
+        ) : (
+          <>
+            <div className="top-bar">
+              <div>
+                <p className="eyebrow">aesthetic productivity board</p>
+                <h1>Khyati’s Checklist</h1>
+                <p className="subtitle">
+                  Keep track of everything beautifully, one tiny win at a time.
+                </p>
               </div>
             </div>
-          )}
 
-          <select
-            value={priority}
-            onChange={(event) => setPriority(event.target.value)}
-          >
-            {priorities.map((level) => (
-              <option key={level}>{level}</option>
-            ))}
-          </select>
+            <div className="stats-grid">
+              <div className="stat-card">
+                <span>Total</span>
+                <strong>{tasks.length}</strong>
+              </div>
 
-          <input
-            type="date"
-            value={dueDate}
-            onChange={(event) => setDueDate(event.target.value)}
-          />
+              <div className="stat-card">
+                <span>Done</span>
+                <strong>{completedCount}</strong>
+              </div>
 
-          <div className="time-input-wrapper">
-            <span className="clock-icon">⏰</span>
-            <input
-              type="text"
-              placeholder="Time"
-              value={estimatedTime}
-              onChange={(event) => setEstimatedTime(event.target.value)}
-            />
-          </div>
+              <div className="stat-card">
+                <span>Left</span>
+                <strong>{tasks.length - completedCount}</strong>
+              </div>
+            </div>
 
-          <button type="submit">Add</button>
-        </form>
+            <div className="progress-card">
+              <div className="progress-info">
+                <span>
+                  {completedCount} of {tasks.length} done
+                </span>
+                <strong>{progress}%</strong>
+              </div>
 
-        <div className="dashboard-layout">
-          <aside className="side-panel">
-            <p className="panel-label">organize</p>
-            <h2>Filters & Sorting</h2>
+              <div className="progress-track">
+                <div className="progress-fill" style={{ width: `${progress}%` }} />
+              </div>
 
-            <label>
-              Search
+              {allDone && (
+                <div className="celebration">
+                  ✨ Everything is done. Khyati is unstoppable. ✨
+                </div>
+              )}
+            </div>
+
+            <form className="task-form" onSubmit={addTask}>
               <input
                 type="text"
-                placeholder="Search tasks..."
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Add something to the checklist..."
+                value={newTask}
+                onChange={(event) => setNewTask(event.target.value)}
               />
-            </label>
 
-            <label>
-              Category
               <select
-                value={filter}
-                onChange={(event) => setFilter(event.target.value)}
+                value={category}
+                onChange={(event) => {
+                  setCategory(event.target.value);
+                  setSubcategory("");
+                  setNewSubcategory("");
+                }}
               >
-                {categories.map((cat) => (
-                  <option key={cat}>{cat}</option>
+                {categories
+                  .filter((cat) => cat !== "All")
+                  .map((cat) => (
+                    <option key={cat}>{cat}</option>
+                  ))}
+              </select>
+
+              {(category === "School" || category === "Work") && (
+                <div className="subcategory-box">
+                  <select
+                    value={subcategory}
+                    onChange={(event) => setSubcategory(event.target.value)}
+                  >
+                    <option value="">No subcategory</option>
+                    {(customSubcategories[category] || []).map((sub) => (
+                      <option key={sub} value={sub}>
+                        {sub}
+                      </option>
+                    ))}
+                  </select>
+
+                  <div className="new-subcategory-row">
+                    <input
+                      type="text"
+                      placeholder={`New ${category.toLowerCase()} subcategory...`}
+                      value={newSubcategory}
+                      onChange={(event) => setNewSubcategory(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          addSubcategory();
+                        }
+                      }}
+                    />
+
+                    <button type="button" onClick={addSubcategory}>
+                      +
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <select
+                value={priority}
+                onChange={(event) => setPriority(event.target.value)}
+              >
+                {priorities.map((level) => (
+                  <option key={level}>{level}</option>
                 ))}
               </select>
-            </label>
 
-            <label>
-              Status
-              <select
-                value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value)}
-              >
-                <option>All</option>
-                <option>Active</option>
-                <option>Completed</option>
-              </select>
-            </label>
+              <input
+                type="date"
+                value={dueDate}
+                onChange={(event) => setDueDate(event.target.value)}
+              />
 
-            <label>
-              Sort by
-              <select
-                value={sortBy}
-                onChange={(event) => setSortBy(event.target.value)}
-              >
-                <option>Default</option>
-                <option>Most urgent</option>
-                <option>Least urgent</option>
-                <option>Most time</option>
-                <option>Least time</option>
-              </select>
-            </label>
-          </aside>
-
-          <div className="task-list">
-            {loading ? (
-              <div className="empty-state">
-                <h2>Loading checklist...</h2>
-                <p>Grabbing the latest version from the cloud.</p>
+              <div className="time-input-wrapper">
+                <span className="clock-icon">⏰</span>
+                <input
+                  type="text"
+                  placeholder="Time"
+                  value={estimatedTime}
+                  onChange={(event) => setEstimatedTime(event.target.value)}
+                />
               </div>
-            ) : filteredTasks.length === 0 ? (
-              <div className="empty-state">
-                <h2>No tasks found</h2>
-                <p>Add a new item or change your filters.</p>
-              </div>
-            ) : (
-              filteredTasks.map((task) => (
-                <article
-                  key={task.id}
-                  className={`task-card ${task.completed ? "completed" : ""}`}
-                >
-                  <button
-                    className="check-button"
-                    onClick={() => toggleTask(task.id)}
+
+              <button type="submit">Add</button>
+            </form>
+
+            <div className="dashboard-layout">
+              <aside className="side-panel">
+                <p className="panel-label">organize</p>
+                <h2>Filters & Sorting</h2>
+
+                <label>
+                  Search
+                  <input
+                    type="text"
+                    placeholder="Search tasks..."
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                  />
+                </label>
+
+                <label>
+                  Category
+                  <select
+                    value={filter}
+                    onChange={(event) => setFilter(event.target.value)}
                   >
-                    {task.completed ? "✓" : ""}
-                  </button>
+                    {categories.map((cat) => (
+                      <option key={cat}>{cat}</option>
+                    ))}
+                  </select>
+                </label>
 
-                  <div className="task-content">
-                    {editingId === task.id ? (
-                      <div className="edit-row">
-                        <input
-                          value={editingText}
-                          onChange={(event) =>
-                            setEditingText(event.target.value)
-                          }
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") saveEdit(task.id);
-                          }}
-                          autoFocus
-                        />
-                        <button type="button" onClick={() => saveEdit(task.id)}>
-                          Save
+                <label>
+                  Status
+                  <select
+                    value={statusFilter}
+                    onChange={(event) => setStatusFilter(event.target.value)}
+                  >
+                    <option>All</option>
+                    <option>Active</option>
+                    <option>Completed</option>
+                  </select>
+                </label>
+
+                <label>
+                  Sort by
+                  <select
+                    value={sortBy}
+                    onChange={(event) => setSortBy(event.target.value)}
+                  >
+                    <option>Default</option>
+                    <option>Most urgent</option>
+                    <option>Least urgent</option>
+                    <option>Most time</option>
+                    <option>Least time</option>
+                  </select>
+                </label>
+              </aside>
+
+              <div className="task-list">
+                {loading ? (
+                  <div className="empty-state">
+                    <h2>Loading checklist...</h2>
+                    <p>Grabbing the latest version from the cloud.</p>
+                  </div>
+                ) : filteredTasks.length === 0 ? (
+                  <div className="empty-state">
+                    <h2>No tasks found</h2>
+                    <p>Add a new item or change your filters.</p>
+                  </div>
+                ) : (
+                  filteredTasks.map((task) => (
+                    <article
+                      key={task.id}
+                      className={`task-card ${task.completed ? "completed" : ""}`}
+                    >
+                      <button
+                        className="check-button"
+                        onClick={() => toggleTask(task.id)}
+                      >
+                        {task.completed ? "✓" : ""}
+                      </button>
+
+                      <div className="task-content">
+                        {editingId === task.id ? (
+                          <div className="edit-row">
+                            <input
+                              value={editingText}
+                              onChange={(event) =>
+                                setEditingText(event.target.value)
+                              }
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") saveEdit(task.id);
+                              }}
+                              autoFocus
+                            />
+                            <button type="button" onClick={() => saveEdit(task.id)}>
+                              Save
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <h3>{task.title}</h3>
+
+                            <div className="task-meta">
+                              <span>{task.category}</span>
+
+                              {task.subcategory && <span>{task.subcategory}</span>}
+
+                              <span
+                                className={`priority ${task.priority.toLowerCase()}`}
+                              >
+                                {task.priority}
+                              </span>
+
+                              {task.dueDate && <span>Due {task.dueDate}</span>}
+
+                              {task.estimatedTime && (
+                                <span className="time-badge">
+                                  ⏰ {task.estimatedTime}
+                                </span>
+                              )}
+                            </div>
+                          </>
+                        )}
+                      </div>
+
+                      <div className="task-actions">
+                        <button type="button" onClick={() => startEditing(task)}>
+                          Edit
+                        </button>
+                        <button type="button" onClick={() => deleteTask(task.id)}>
+                          Delete
                         </button>
                       </div>
-                    ) : (
-                      <>
-                        <h3>{task.title}</h3>
+                    </article>
+                  ))
+                )}
+              </div>
+            </div>
 
-                        <div className="task-meta">
-                          <span>{task.category}</span>
-
-                          {task.subcategory && <span>{task.subcategory}</span>}
-
-                          <span
-                            className={`priority ${task.priority.toLowerCase()}`}
-                          >
-                            {task.priority}
-                          </span>
-
-                          {task.dueDate && <span>Due {task.dueDate}</span>}
-
-                          {task.estimatedTime && (
-                            <span className="time-badge">
-                              ⏰ {task.estimatedTime}
-                            </span>
-                          )}
-                        </div>
-                      </>
-                    )}
-                  </div>
-
-                  <div className="task-actions">
-                    <button type="button" onClick={() => startEditing(task)}>
-                      Edit
-                    </button>
-                    <button type="button" onClick={() => deleteTask(task.id)}>
-                      Delete
-                    </button>
-                  </div>
-                </article>
-              ))
-            )}
-          </div>
-        </div>
-
-        <div className="bottom-actions">
-          <button type="button" onClick={clearCompleted}>
-            Clear completed
-          </button>
-          <button type="button" onClick={resetChecklist}>
-            Reset all
-          </button>
-        </div>
+            <div className="bottom-actions">
+              <button type="button" onClick={clearCompleted}>
+                Clear completed
+              </button>
+              <button type="button" onClick={resetChecklist}>
+                Reset all
+              </button>
+            </div>
+          </>
+        )}
       </section>
     </main>
   );
