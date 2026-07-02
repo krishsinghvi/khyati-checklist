@@ -43,6 +43,23 @@ function getPokerProfit(session) {
   return Number(session.cash_out || 0) - Number(session.buy_in || 0);
 }
 
+function getMonthKey(dateText) {
+  if (!dateText) return "";
+  return dateText.slice(0, 7);
+}
+
+function getMonthLabel(monthKey) {
+  if (!monthKey || monthKey === "All") return "All time";
+
+  const [year, month] = monthKey.split("-");
+  const date = new Date(Number(year), Number(month) - 1, 1);
+
+  return date.toLocaleString("en-US", {
+    month: "long",
+    year: "numeric",
+  });
+}
+
 function AppMenu({ activePage, setActivePage, theme, setTheme }) {
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -99,6 +116,118 @@ function AppMenu({ activePage, setActivePage, theme, setTheme }) {
   );
 }
 
+function PokerGraph({ sessions }) {
+  const points = useMemo(() => {
+    let runningTotal = 0;
+
+    return [...sessions]
+      .sort((a, b) => new Date(a.date) - new Date(b.date))
+      .map((session, index) => {
+        const profit = getPokerProfit(session);
+        runningTotal += profit;
+
+        return {
+          id: session.id,
+          index,
+          date: session.date,
+          profit,
+          bankroll: runningTotal,
+        };
+      });
+  }, [sessions]);
+
+  if (points.length === 0) {
+    return (
+      <div className="poker-chart-empty">
+        <h2>No graph yet</h2>
+        <p>Add a session to see your bankroll movement.</p>
+      </div>
+    );
+  }
+
+  const width = 900;
+  const height = 280;
+  const padX = 44;
+  const padY = 38;
+
+  const maxValue = Math.max(...points.map((point) => point.bankroll), 0);
+  const minValue = Math.min(...points.map((point) => point.bankroll), 0);
+  const range = Math.max(maxValue - minValue, 1);
+
+  function getX(index) {
+    if (points.length === 1) return width / 2;
+    return padX + (index / (points.length - 1)) * (width - padX * 2);
+  }
+
+  function getY(value) {
+    return height - padY - ((value - minValue) / range) * (height - padY * 2);
+  }
+
+  const zeroY = getY(0);
+
+  return (
+    <div className="poker-chart-wrap">
+      <svg viewBox={`0 0 ${width} ${height}`} className="poker-chart">
+        <line
+          x1={padX}
+          x2={width - padX}
+          y1={zeroY}
+          y2={zeroY}
+          className="poker-chart-zero"
+        />
+
+        {points.length === 1 ? (
+          <circle
+            cx={getX(0)}
+            cy={getY(points[0].bankroll)}
+            r="7"
+            className={points[0].bankroll >= 0 ? "chart-dot-good" : "chart-dot-bad"}
+          />
+        ) : (
+          points.slice(1).map((point, index) => {
+            const previous = points[index];
+            const isPositive = point.bankroll >= 0;
+
+            return (
+              <line
+                key={`${point.id}-line`}
+                x1={getX(previous.index)}
+                y1={getY(previous.bankroll)}
+                x2={getX(point.index)}
+                y2={getY(point.bankroll)}
+                className={isPositive ? "chart-line-good" : "chart-line-bad"}
+              />
+            );
+          })
+        )}
+
+        {points.map((point) => (
+          <circle
+            key={`${point.id}-dot`}
+            cx={getX(point.index)}
+            cy={getY(point.bankroll)}
+            r="5"
+            className={point.bankroll >= 0 ? "chart-dot-good" : "chart-dot-bad"}
+          />
+        ))}
+      </svg>
+
+      <div className="poker-chart-footer">
+        <span>
+          Sessions shown: <strong>{points.length}</strong>
+        </span>
+
+        <span>
+          Current total:{" "}
+          <strong className={points[points.length - 1].bankroll >= 0 ? "profit-good" : "profit-bad"}>
+            {formatCurrency(points[points.length - 1].bankroll)}
+          </strong>
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function PokerTracker() {
   const [pokerSessions, setPokerSessions] = useState([]);
   const [pokerLoading, setPokerLoading] = useState(true);
@@ -112,6 +241,7 @@ function PokerTracker() {
   });
 
   const [pokerFilter, setPokerFilter] = useState("All");
+  const [monthFilter, setMonthFilter] = useState("All");
   const [pokerSortBy, setPokerSortBy] = useState("Newest first");
 
   useEffect(() => {
@@ -222,36 +352,58 @@ function PokerTracker() {
     setPokerSessions([]);
   }
 
+  const monthOptions = useMemo(() => {
+    const months = pokerSessions
+      .map((session) => getMonthKey(session.date))
+      .filter(Boolean);
+
+    return [...new Set(months)].sort((a, b) => b.localeCompare(a));
+  }, [pokerSessions]);
+
+  const filteredSessions = useMemo(() => {
+    let result = [...pokerSessions];
+
+    if (monthFilter !== "All") {
+      result = result.filter((session) => getMonthKey(session.date) === monthFilter);
+    }
+
+    if (pokerFilter !== "All") {
+      result = result.filter((session) => session.game_type === pokerFilter);
+    }
+
+    return result;
+  }, [pokerSessions, monthFilter, pokerFilter]);
+
   const pokerStats = useMemo(() => {
-    const totalProfit = pokerSessions.reduce(
+    const totalProfit = filteredSessions.reduce(
       (sum, session) => sum + getPokerProfit(session),
       0
     );
 
-    const totalHours = pokerSessions.reduce(
+    const totalHours = filteredSessions.reduce(
       (sum, session) => sum + Number(session.hours || 0),
       0
     );
 
     const hourlyRate = totalHours > 0 ? totalProfit / totalHours : 0;
 
-    const winningSessions = pokerSessions.filter(
+    const winningSessions = filteredSessions.filter(
       (session) => getPokerProfit(session) > 0
     ).length;
 
     const winRate =
-      pokerSessions.length > 0
-        ? Math.round((winningSessions / pokerSessions.length) * 100)
+      filteredSessions.length > 0
+        ? Math.round((winningSessions / filteredSessions.length) * 100)
         : 0;
 
     const bestSession =
-      pokerSessions.length > 0
-        ? Math.max(...pokerSessions.map((session) => getPokerProfit(session)))
+      filteredSessions.length > 0
+        ? Math.max(...filteredSessions.map((session) => getPokerProfit(session)))
         : 0;
 
     const worstSession =
-      pokerSessions.length > 0
-        ? Math.min(...pokerSessions.map((session) => getPokerProfit(session)))
+      filteredSessions.length > 0
+        ? Math.min(...filteredSessions.map((session) => getPokerProfit(session)))
         : 0;
 
     return {
@@ -261,35 +413,31 @@ function PokerTracker() {
       winRate,
       bestSession,
       worstSession,
-      totalSessions: pokerSessions.length,
+      totalSessions: filteredSessions.length,
     };
-  }, [pokerSessions]);
+  }, [filteredSessions]);
 
-  const filteredPokerSessions = useMemo(() => {
-    let filtered = [...pokerSessions];
-
-    if (pokerFilter !== "All") {
-      filtered = filtered.filter((session) => session.game_type === pokerFilter);
-    }
+  const sortedPokerSessions = useMemo(() => {
+    const result = [...filteredSessions];
 
     if (pokerSortBy === "Newest first") {
-      filtered.sort((a, b) => new Date(b.date) - new Date(a.date));
+      result.sort((a, b) => new Date(b.date) - new Date(a.date));
     }
 
     if (pokerSortBy === "Oldest first") {
-      filtered.sort((a, b) => new Date(a.date) - new Date(b.date));
+      result.sort((a, b) => new Date(a.date) - new Date(b.date));
     }
 
     if (pokerSortBy === "Highest profit") {
-      filtered.sort((a, b) => getPokerProfit(b) - getPokerProfit(a));
+      result.sort((a, b) => getPokerProfit(b) - getPokerProfit(a));
     }
 
     if (pokerSortBy === "Lowest profit") {
-      filtered.sort((a, b) => getPokerProfit(a) - getPokerProfit(b));
+      result.sort((a, b) => getPokerProfit(a) - getPokerProfit(b));
     }
 
-    return filtered;
-  }, [pokerSessions, pokerFilter, pokerSortBy]);
+    return result;
+  }, [filteredSessions, pokerSortBy]);
 
   const projectedProfit =
     Number(pokerForm.cash_out || 0) - Number(pokerForm.buy_in || 0);
@@ -301,14 +449,19 @@ function PokerTracker() {
           <p className="poker-eyebrow">♠ bankroll command center</p>
           <h1>Poker Earnings</h1>
           <p>
-            Track buy-ins, cash-outs, session type, and hourly rate in a clean
-            poker dashboard.
+            Track buy-ins, cash-outs, session type, monthly performance, and bankroll movement.
           </p>
         </div>
 
         <button className="poker-danger-button" onClick={resetPokerTracker}>
           Reset Tracker
         </button>
+      </div>
+
+      <div className="poker-period-banner">
+        <span>Viewing</span>
+        <strong>{monthFilter === "All" ? "All time" : getMonthLabel(monthFilter)}</strong>
+        {pokerFilter !== "All" && <em>{pokerFilter}</em>}
       </div>
 
       <div className="poker-stats-grid">
@@ -350,6 +503,18 @@ function PokerTracker() {
           <span>Worst Session</span>
           <strong className="profit-bad">{formatCurrency(pokerStats.worstSession)}</strong>
         </div>
+      </div>
+
+      <div className="poker-chart-card">
+        <div className="poker-chart-header">
+          <div>
+            <p className="poker-eyebrow">♥ bankroll graph</p>
+            <h2>Performance Over Sessions</h2>
+          </div>
+          <p>Green means your running total is positive. Red means it is negative.</p>
+        </div>
+
+        <PokerGraph sessions={filteredSessions} />
       </div>
 
       <div className="poker-main-grid">
@@ -437,6 +602,18 @@ function PokerTracker() {
 
             <div className="poker-filters">
               <select
+                value={monthFilter}
+                onChange={(event) => setMonthFilter(event.target.value)}
+              >
+                <option value="All">All months</option>
+                {monthOptions.map((month) => (
+                  <option key={month} value={month}>
+                    {getMonthLabel(month)}
+                  </option>
+                ))}
+              </select>
+
+              <select
                 value={pokerFilter}
                 onChange={(event) => setPokerFilter(event.target.value)}
               >
@@ -463,14 +640,14 @@ function PokerTracker() {
               <h2>Loading sessions...</h2>
               <p>Pulling the latest data from Supabase.</p>
             </div>
-          ) : filteredPokerSessions.length === 0 ? (
+          ) : sortedPokerSessions.length === 0 ? (
             <div className="poker-empty">
-              <h2>No poker sessions yet</h2>
-              <p>Add your first session to start tracking your bankroll.</p>
+              <h2>No poker sessions found</h2>
+              <p>Try another month or add a new session.</p>
             </div>
           ) : (
             <div className="poker-session-list">
-              {filteredPokerSessions.map((session) => {
+              {sortedPokerSessions.map((session) => {
                 const profit = getPokerProfit(session);
 
                 return (
