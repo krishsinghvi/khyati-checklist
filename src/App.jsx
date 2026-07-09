@@ -117,6 +117,8 @@ function AppMenu({ activePage, setActivePage, theme, setTheme }) {
 }
 
 function PokerGraph({ sessions }) {
+  const [hoveredPoint, setHoveredPoint] = useState(null);
+
   const points = useMemo(() => {
     let runningTotal = 0;
 
@@ -132,6 +134,7 @@ function PokerGraph({ sessions }) {
           date: session.date,
           profit,
           bankroll: runningTotal,
+          gameType: session.game_type,
         };
       });
   }, [sessions]);
@@ -163,11 +166,42 @@ function PokerGraph({ sessions }) {
     return height - padY - ((value - minValue) / range) * (height - padY * 2);
   }
 
+  function formatShortDate(dateText) {
+    const date = new Date(dateText + "T00:00:00");
+
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  }
+
   const zeroY = getY(0);
+  const activePoint = hoveredPoint || points[points.length - 1];
+
+  const activeX = getX(activePoint.index);
+  const activeY = getY(activePoint.bankroll);
+
+  const tooltipWidth = 210;
+  const tooltipHeight = 86;
+
+  const tooltipX = Math.min(
+    Math.max(activeX - tooltipWidth / 2, 12),
+    width - tooltipWidth - 12
+  );
+
+  const tooltipY =
+    activeY - tooltipHeight - 18 < 10
+      ? activeY + 18
+      : activeY - tooltipHeight - 18;
 
   return (
     <div className="poker-chart-wrap">
-      <svg viewBox={`0 0 ${width} ${height}`} className="poker-chart">
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        className="poker-chart"
+        onMouseLeave={() => setHoveredPoint(null)}
+      >
         <line
           x1={padX}
           x2={width - padX}
@@ -201,15 +235,81 @@ function PokerGraph({ sessions }) {
           })
         )}
 
-        {points.map((point) => (
-          <circle
-            key={`${point.id}-dot`}
-            cx={getX(point.index)}
-            cy={getY(point.bankroll)}
-            r="5"
-            className={point.bankroll >= 0 ? "chart-dot-good" : "chart-dot-bad"}
+        {points.map((point, index) => {
+          const previousX = index === 0 ? padX : getX(index - 1);
+          const nextX = index === points.length - 1 ? width - padX : getX(index + 1);
+          const currentX = getX(index);
+
+          const zoneStart = index === 0 ? padX : (previousX + currentX) / 2;
+          const zoneEnd = index === points.length - 1 ? width - padX : (currentX + nextX) / 2;
+
+          return (
+            <rect
+              key={`${point.id}-hover-zone`}
+              x={zoneStart}
+              y="0"
+              width={Math.max(zoneEnd - zoneStart, 20)}
+              height={height}
+              className="chart-hover-zone"
+              onMouseEnter={() => setHoveredPoint(point)}
+              onMouseMove={() => setHoveredPoint(point)}
+            />
+          );
+        })}
+
+        <line
+          x1={activeX}
+          x2={activeX}
+          y1={padY}
+          y2={height - padY}
+          className="chart-hover-line"
+        />
+
+        {points.map((point) => {
+          const isActive = activePoint.id === point.id;
+
+          return (
+            <circle
+              key={`${point.id}-dot`}
+              cx={getX(point.index)}
+              cy={getY(point.bankroll)}
+              r={isActive ? "8" : "5"}
+              className={point.bankroll >= 0 ? "chart-dot-good" : "chart-dot-bad"}
+              onMouseEnter={() => setHoveredPoint(point)}
+            />
+          );
+        })}
+
+        <g className="chart-tooltip">
+          <rect
+            x={tooltipX}
+            y={tooltipY}
+            width={tooltipWidth}
+            height={tooltipHeight}
+            rx="16"
+            className="chart-tooltip-box"
           />
-        ))}
+
+          <text x={tooltipX + 16} y={tooltipY + 25} className="chart-tooltip-title">
+            {formatShortDate(activePoint.date)}
+          </text>
+
+          <text x={tooltipX + 16} y={tooltipY + 48} className="chart-tooltip-text">
+            Session: {formatCurrency(activePoint.profit)}
+          </text>
+
+          <text
+            x={tooltipX + 16}
+            y={tooltipY + 70}
+            className={
+              activePoint.bankroll >= 0
+                ? "chart-tooltip-good"
+                : "chart-tooltip-bad"
+            }
+          >
+            Total: {formatCurrency(activePoint.bankroll)}
+          </text>
+        </g>
       </svg>
 
       <div className="poker-chart-footer">
@@ -511,7 +611,7 @@ function PokerTracker() {
             <p className="poker-eyebrow">♥ bankroll graph</p>
             <h2>Performance Over Sessions</h2>
           </div>
-          <p>Green means your running total is positive. Red means it is negative.</p>
+          <p>Hover over the graph to see your running total at each session.</p>
         </div>
 
         <PokerGraph sessions={filteredSessions} />
