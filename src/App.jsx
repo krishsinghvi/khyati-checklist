@@ -10,6 +10,16 @@ const fallbackSubcategories = {
   Work: ["Meeting", "Email", "Project"],
 };
 
+const recipeCategories = [
+  "All",
+  "Breakfast",
+  "Lunch",
+  "Dinner",
+  "Snack",
+  "Dessert",
+  "Drink",
+];
+
 function parseEstimatedMinutes(timeText) {
   if (!timeText) return 0;
 
@@ -97,6 +107,14 @@ function AppMenu({ activePage, setActivePage, theme, setTheme }) {
             onClick={() => switchPage("poker")}
           >
             Poker Earnings
+          </button>
+
+          <button
+            type="button"
+            className={activePage === "recipes" ? "active" : ""}
+            onClick={() => switchPage("recipes")}
+          >
+            Recipe Library
           </button>
 
           <div className="menu-divider"></div>
@@ -786,6 +804,495 @@ function PokerTracker() {
   );
 }
 
+function RecipeDetailPage({ recipe, onBack, onToggleFavorite, onDelete }) {
+  return (
+    <div className="recipe-detail-page">
+      <button type="button" className="recipe-back-button" onClick={onBack}>
+        ← Back to Recipe Library
+      </button>
+
+      <div className="recipe-detail-hero">
+        <div>
+          <p className="recipe-eyebrow">recipe card</p>
+          <h1>{recipe.title}</h1>
+
+          <div className="recipe-detail-meta">
+            <span>{recipe.category}</span>
+            {recipe.time && <span>{recipe.time}</span>}
+            {recipe.favorite && <span>★ Favorite</span>}
+          </div>
+        </div>
+
+        <div className="recipe-detail-actions">
+          <button type="button" onClick={() => onToggleFavorite(recipe)}>
+            {recipe.favorite ? "Unfavorite" : "Favorite"}
+          </button>
+
+          <button
+            type="button"
+            className="recipe-delete-button"
+            onClick={() => onDelete(recipe.id)}
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+
+      <div className="recipe-detail-grid">
+        <section className="recipe-big-section">
+          <h2>Ingredients</h2>
+          {recipe.ingredients ? (
+            <p>{recipe.ingredients}</p>
+          ) : (
+            <p className="recipe-muted">No ingredients added yet.</p>
+          )}
+        </section>
+
+        <section className="recipe-big-section">
+          <h2>Instructions</h2>
+          {recipe.instructions ? (
+            <p>{recipe.instructions}</p>
+          ) : (
+            <p className="recipe-muted">No instructions added yet.</p>
+          )}
+        </section>
+      </div>
+
+      {recipe.notes && (
+        <section className="recipe-notes-section">
+          <h2>Notes</h2>
+          <p>{recipe.notes}</p>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function RecipeLibrary() {
+  const [recipes, setRecipes] = useState([]);
+  const [recipesLoading, setRecipesLoading] = useState(true);
+  const [selectedRecipe, setSelectedRecipe] = useState(null);
+
+  const [recipeForm, setRecipeForm] = useState({
+    title: "",
+    category: "Dinner",
+    time: "",
+    ingredients: "",
+    instructions: "",
+    notes: "",
+    favorite: false,
+  });
+
+  const [recipeSearch, setRecipeSearch] = useState("");
+  const [recipeCategoryFilter, setRecipeCategoryFilter] = useState("All");
+  const [favoriteFilter, setFavoriteFilter] = useState("All");
+  const [recipeSortBy, setRecipeSortBy] = useState("Newest first");
+
+  useEffect(() => {
+    fetchRecipes();
+  }, []);
+
+  async function fetchRecipes() {
+    setRecipesLoading(true);
+
+    const { data, error } = await supabase
+      .from("recipes")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("Error loading recipes:", error.message);
+      console.error(error);
+      setRecipes([]);
+    } else {
+      setRecipes(data || []);
+    }
+
+    setRecipesLoading(false);
+  }
+
+  function handleRecipeChange(event) {
+    const { name, value, type, checked } = event.target;
+
+    setRecipeForm({
+      ...recipeForm,
+      [name]: type === "checkbox" ? checked : value,
+    });
+  }
+
+  async function addRecipe(event) {
+    event.preventDefault();
+
+    if (!recipeForm.title.trim()) {
+      alert("Please add a recipe name.");
+      return;
+    }
+
+    const newRecipe = {
+      title: recipeForm.title.trim(),
+      category: recipeForm.category,
+      time: recipeForm.time.trim(),
+      ingredients: recipeForm.ingredients.trim(),
+      instructions: recipeForm.instructions.trim(),
+      notes: recipeForm.notes.trim(),
+      favorite: recipeForm.favorite,
+    };
+
+    const { data, error } = await supabase
+      .from("recipes")
+      .insert([newRecipe])
+      .select()
+      .single();
+
+    if (error) {
+      console.error("Error adding recipe:", error.message);
+      console.error(error);
+      alert(`Could not add recipe: ${error.message}`);
+      return;
+    }
+
+    setRecipes([data, ...recipes]);
+
+    setRecipeForm({
+      title: "",
+      category: "Dinner",
+      time: "",
+      ingredients: "",
+      instructions: "",
+      notes: "",
+      favorite: false,
+    });
+  }
+
+  async function deleteRecipe(id) {
+    const confirmed = window.confirm("Are you sure you want to delete this recipe?");
+    if (!confirmed) return;
+
+    const { error } = await supabase.from("recipes").delete().eq("id", id);
+
+    if (error) {
+      console.error("Error deleting recipe:", error.message);
+      console.error(error);
+      alert(`Could not delete recipe: ${error.message}`);
+      return;
+    }
+
+    setRecipes(recipes.filter((recipe) => recipe.id !== id));
+    setSelectedRecipe(null);
+  }
+
+  async function toggleFavorite(recipe) {
+    const { data, error } = await supabase
+      .from("recipes")
+      .update({ favorite: !recipe.favorite })
+      .eq("id", recipe.id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error("Error updating favorite:", error.message);
+      console.error(error);
+      alert(`Could not update favorite: ${error.message}`);
+      return;
+    }
+
+    setRecipes(recipes.map((item) => (item.id === recipe.id ? data : item)));
+
+    if (selectedRecipe?.id === recipe.id) {
+      setSelectedRecipe(data);
+    }
+  }
+
+  const recipeStats = useMemo(() => {
+    const favoriteCount = recipes.filter((recipe) => recipe.favorite).length;
+
+    return {
+      totalRecipes: recipes.length,
+      favoriteCount,
+      dinnerCount: recipes.filter((recipe) => recipe.category === "Dinner").length,
+    };
+  }, [recipes]);
+
+  const filteredRecipes = useMemo(() => {
+    let result = [...recipes];
+
+    if (recipeSearch.trim()) {
+      const search = recipeSearch.toLowerCase();
+
+      result = result.filter((recipe) => {
+        return (
+          (recipe.title || "").toLowerCase().includes(search) ||
+          (recipe.ingredients || "").toLowerCase().includes(search) ||
+          (recipe.instructions || "").toLowerCase().includes(search) ||
+          (recipe.notes || "").toLowerCase().includes(search)
+        );
+      });
+    }
+
+    if (recipeCategoryFilter !== "All") {
+      result = result.filter((recipe) => recipe.category === recipeCategoryFilter);
+    }
+
+    if (favoriteFilter === "Favorites only") {
+      result = result.filter((recipe) => recipe.favorite);
+    }
+
+    if (recipeSortBy === "Newest first") {
+      result.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    }
+
+    if (recipeSortBy === "Oldest first") {
+      result.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    }
+
+    if (recipeSortBy === "A-Z") {
+      result.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
+    }
+
+    if (recipeSortBy === "Z-A") {
+      result.sort((a, b) => (b.title || "").localeCompare(a.title || ""));
+    }
+
+    return result;
+  }, [recipes, recipeSearch, recipeCategoryFilter, favoriteFilter, recipeSortBy]);
+
+  if (selectedRecipe) {
+    return (
+      <RecipeDetailPage
+        recipe={selectedRecipe}
+        onBack={() => setSelectedRecipe(null)}
+        onToggleFavorite={toggleFavorite}
+        onDelete={deleteRecipe}
+      />
+    );
+  }
+
+  return (
+    <div className="recipe-page">
+      <div className="recipe-hero">
+        <div>
+          <p className="recipe-eyebrow">recipe vault</p>
+          <h1>Recipe Library</h1>
+          <p>
+            Save your favorite meals, ingredients, instructions, and cooking notes
+            in one easy-to-search place.
+          </p>
+        </div>
+      </div>
+
+      <div className="recipe-stats-grid">
+        <div className="recipe-stat-card main-stat">
+          <span>Total Recipes</span>
+          <strong>{recipeStats.totalRecipes}</strong>
+        </div>
+
+        <div className="recipe-stat-card">
+          <span>Favorites</span>
+          <strong>{recipeStats.favoriteCount}</strong>
+        </div>
+
+        <div className="recipe-stat-card">
+          <span>Dinners</span>
+          <strong>{recipeStats.dinnerCount}</strong>
+        </div>
+      </div>
+
+      <div className="recipe-main-grid">
+        <form className="recipe-form-card" onSubmit={addRecipe}>
+          <div>
+            <p className="recipe-eyebrow">add recipe</p>
+            <h2>New Recipe</h2>
+          </div>
+
+          <label>
+            Recipe Name
+            <input
+              type="text"
+              name="title"
+              placeholder="ex: Tomato pasta"
+              value={recipeForm.title}
+              onChange={handleRecipeChange}
+            />
+          </label>
+
+          <label>
+            Category
+            <select
+              name="category"
+              value={recipeForm.category}
+              onChange={handleRecipeChange}
+            >
+              {recipeCategories
+                .filter((category) => category !== "All")
+                .map((category) => (
+                  <option key={category}>{category}</option>
+                ))}
+            </select>
+          </label>
+
+          <label>
+            Time
+            <input
+              type="text"
+              name="time"
+              placeholder="ex: 30 min"
+              value={recipeForm.time}
+              onChange={handleRecipeChange}
+            />
+          </label>
+
+          <label>
+            Ingredients
+            <textarea
+              name="ingredients"
+              placeholder="Paste ingredients here..."
+              value={recipeForm.ingredients}
+              onChange={handleRecipeChange}
+            />
+          </label>
+
+          <label>
+            Instructions
+            <textarea
+              name="instructions"
+              placeholder="Paste instructions here..."
+              value={recipeForm.instructions}
+              onChange={handleRecipeChange}
+            />
+          </label>
+
+          <label>
+            Notes
+            <textarea
+              name="notes"
+              placeholder="Any substitutions, ratings, or reminders..."
+              value={recipeForm.notes}
+              onChange={handleRecipeChange}
+            />
+          </label>
+
+          <label className="recipe-favorite-row">
+            <input
+              type="checkbox"
+              name="favorite"
+              checked={recipeForm.favorite}
+              onChange={handleRecipeChange}
+            />
+            Mark as favorite
+          </label>
+
+          <button type="submit" className="recipe-add-button">
+            Add Recipe
+          </button>
+        </form>
+
+        <div className="recipe-library-card">
+          <div className="recipe-library-header">
+            <div>
+              <p className="recipe-eyebrow">saved recipes</p>
+              <h2>Library</h2>
+            </div>
+
+            <div className="recipe-filters">
+              <input
+                type="text"
+                placeholder="Search recipes..."
+                value={recipeSearch}
+                onChange={(event) => setRecipeSearch(event.target.value)}
+              />
+
+              <select
+                value={recipeCategoryFilter}
+                onChange={(event) => setRecipeCategoryFilter(event.target.value)}
+              >
+                {recipeCategories.map((category) => (
+                  <option key={category}>{category}</option>
+                ))}
+              </select>
+
+              <select
+                value={favoriteFilter}
+                onChange={(event) => setFavoriteFilter(event.target.value)}
+              >
+                <option>All</option>
+                <option>Favorites only</option>
+              </select>
+
+              <select
+                value={recipeSortBy}
+                onChange={(event) => setRecipeSortBy(event.target.value)}
+              >
+                <option>Newest first</option>
+                <option>Oldest first</option>
+                <option>A-Z</option>
+                <option>Z-A</option>
+              </select>
+            </div>
+          </div>
+
+          {recipesLoading ? (
+            <div className="recipe-empty">
+              <h2>Loading recipes...</h2>
+              <p>Pulling your saved recipes from Supabase.</p>
+            </div>
+          ) : filteredRecipes.length === 0 ? (
+            <div className="recipe-empty">
+              <h2>No recipes found</h2>
+              <p>Add a recipe or adjust your filters.</p>
+            </div>
+          ) : (
+            <div className="recipe-list">
+              {filteredRecipes.map((recipe) => {
+                return (
+                  <article key={recipe.id} className="recipe-card">
+                    <div className="recipe-card-top">
+                      <div>
+                        <div className="recipe-title-row">
+                          <h3>{recipe.title}</h3>
+                          {recipe.favorite && <span className="favorite-pill">★ Favorite</span>}
+                        </div>
+
+                        <div className="recipe-meta">
+                          <span>{recipe.category}</span>
+                          {recipe.time && <span>{recipe.time}</span>}
+                        </div>
+                      </div>
+
+                      <div className="recipe-card-actions">
+                        <button
+                          type="button"
+                          onClick={() => toggleFavorite(recipe)}
+                        >
+                          {recipe.favorite ? "Unfavorite" : "Favorite"}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setSelectedRecipe(recipe)}
+                        >
+                          Open
+                        </button>
+
+                        <button
+                          type="button"
+                          className="recipe-delete-button"
+                          onClick={() => deleteRecipe(recipe.id)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [activePage, setActivePage] = useState("checklist");
 
@@ -1129,7 +1636,15 @@ export default function App() {
   }
 
   return (
-    <main className={`app ${activePage === "poker" ? "poker-app" : ""}`}>
+    <main
+      className={`app ${
+        activePage === "poker"
+          ? "poker-app"
+          : activePage === "recipes"
+          ? "recipe-app"
+          : ""
+      }`}
+    >
       <AppMenu
         activePage={activePage}
         setActivePage={setActivePage}
@@ -1137,12 +1652,22 @@ export default function App() {
         setTheme={setTheme}
       />
 
-      <section className={`checklist-shell ${activePage === "poker" ? "poker-shell" : ""}`}>
+      <section
+        className={`checklist-shell ${
+          activePage === "poker"
+            ? "poker-shell"
+            : activePage === "recipes"
+            ? "recipe-shell"
+            : ""
+        }`}
+      >
         <div className="blob blob-one"></div>
         <div className="blob blob-two"></div>
 
         {activePage === "poker" ? (
           <PokerTracker />
+        ) : activePage === "recipes" ? (
+          <RecipeLibrary />
         ) : (
           <>
             <div className="top-bar">
